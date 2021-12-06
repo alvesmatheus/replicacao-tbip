@@ -1,0 +1,146 @@
+---
+title: "Replicação do experimento com o modelo Text-Based Ideal Points (TBIP)"
+author: "Matheus Alves dos Santos"
+output:
+  html_document:
+    theme: flatly
+    code_folding: "hide"
+    df_print: paged
+    toc: yes
+    toc_depth: 5
+    toc_float:
+      collapsed: no
+css: ./styles.css
+---
+
+```{r warning = FALSE, message = FALSE, error = FALSE}
+library(boot)
+library(broom)
+library(dplyr)
+library(ggplot2)
+library(here)
+library(hrbrthemes)
+library(readr)
+library(scales)
+
+theme_set(theme_ipsum_tw())
+set.seed(123)
+
+theme_settings <- theme(axis.title.x = element_text(family = 'Times New Roman', face = 'bold',
+                                                    vjust = -2, hjust = 0.5, size = 18),
+                        axis.title.y = element_text(family = 'Times New Roman', face = 'bold',
+                                                    vjust = 3, hjust = 0.5, size = 18),
+                        axis.text.x = element_text(family = 'Times New Roman', size = 16),
+                        axis.text.y = element_text(family = 'Times New Roman', size = 16),
+                        strip.text = element_text(family = 'Times New Roman', face = 'bold',
+                                                  vjust = 2, hjust = 0.5, size = 16),
+                        legend.box.margin = margin(0, 0, 0, 0, 'pt'),
+                        legend.box.just = 'center',
+                        legend.title = element_text(family = 'Times New Roman', face = 'bold',
+                                                    size = 16),
+                        legend.text = element_text(family = 'Times New Roman', size = 16),
+                        legend.position = 'top',
+                        legend.direction = 'horizontal')
+
+pontos_ideais_tbip <- read_csv(here('data/ideal_points_tbip.csv'))
+pontos_ideais_votacoes <- read_csv(here('data/ideal_points_votes.csv'))
+
+senadores_descartados <- pontos_ideais_votacoes %>%
+  full_join(pontos_ideais_tbip) %>%
+  group_by(`Senador(a)`) %>%
+  count() %>%
+  filter(n < 2) %>%
+  nrow()
+
+pontos_ideais <- pontos_ideais_votacoes %>%
+  inner_join(pontos_ideais_tbip, by = c('Senador(a)', 'Filiação')) %>%
+  rename(`Ponto Ideal (Votações)` = `Ponto Ideal.x`,
+         `Ponto Ideal (TBIP)` = `Ponto Ideal.y`)
+```
+
+```{r warning = FALSE, message = FALSE, error = FALSE}
+estimativa_correlacao <- function(d, i) {
+    d %>% 
+      slice(i) %>% 
+      mutate(correlacao = cor(`Ponto Ideal (Votações)`, `Ponto Ideal (TBIP)`)) %>%
+      pull(correlacao) %>%
+      first()
+}
+
+correlacao_pontos_ideais <- boot(data = pontos_ideais,
+                                statistic = estimativa_correlacao,
+                                R = 2000) %>%
+  tidy(conf.level = .95, conf.method = 'bca', conf.int = TRUE)
+
+correlacao_pontos_ideais
+```
+
+```{r warning = FALSE, message = FALSE, error = FALSE}
+estimativa_media_democratas <- function(d, i) {
+    d %>% 
+      slice(i) %>%
+      filter(`Filiação` == 'Democratas') %>%
+      pull(`Ponto Ideal`)%>%
+      mean()
+}
+
+estimativa_media_republicanos <- function(d, i) {
+    d %>% 
+      slice(i) %>%
+      filter(`Filiação` == 'Republicanos') %>%
+      pull(`Ponto Ideal`)%>%
+      mean()
+}
+
+estimativa_diferenca_partidos <- function(d, i) {
+    estimativa_media_republicanos(d, i) - estimativa_media_democratas(d, i)
+}
+
+media_democratas <- boot(data = pontos_ideais_tbip, statistic = estimativa_media_democratas, R = 2000) %>%
+  tidy(conf.level = .95, conf.method = 'bca', conf.int = TRUE)
+
+media_republicanos <- boot(data = pontos_ideais_tbip, statistic = estimativa_media_republicanos, R = 2000) %>%
+  tidy(conf.level = .95, conf.method = 'bca', conf.int = TRUE)
+
+diferenca_media_partidos <- boot(data = pontos_ideais_tbip, statistic = estimativa_diferenca_partidos, R = 2000) %>%
+  tidy(conf.level = .95, conf.method = 'bca', conf.int = TRUE)
+
+estimativas_pi_partidos <- bind_rows(
+    media_democratas %>% mutate(type = 'Democratas', order = 1),
+    media_republicanos %>% mutate(type = 'Republicanos' , order = 2),
+    diferenca_media_partidos %>% mutate(type = 'Diferença entre Partidos', order = 3),
+)
+
+estimativas_pi_partidos
+```
+
+```{r error=FALSE, message=FALSE, warning=FALSE}
+pontos_ideais_votacoes %>%
+  mutate(`Tipo` = 'Modelo baseado em votações') %>%
+  bind_rows(pontos_ideais_tbip %>% mutate(`Tipo` = 'Modelo baseado em textos (TBIP)')) %>%
+  ggplot(aes(x = `Ponto Ideal`, y = '', color = `Filiação`, shape = `Filiação`)) +
+  geom_point(size = 3, alpha = 0.4) +
+  scale_color_manual(values = c('#4361ee', '#6c757d', '#e63946')) +
+  facet_wrap(~ `Tipo`, ncol = 1, scales = 'free') +
+  labs(x = '', y = '') +
+  theme_settings
+```
+
+```{r error=FALSE, message=FALSE, warning=FALSE}
+pontos_ideais %>%
+  ggplot(aes(x = `Ponto Ideal (TBIP)`, y = `Ponto Ideal (Votações)`, color = `Filiação`, shape = `Filiação`)) +
+  geom_point(size = 3, alpha = 0.4) +
+  scale_color_manual(values = c('#4361ee', '#6c757d', '#e63946')) +
+  theme_settings
+```
+
+```{r error=FALSE, message=FALSE, warning=FALSE}
+estimativas_pi_partidos %>%
+  ggplot(aes(x = reorder(type, -order), y = statistic, ymin = conf.low, ymax = conf.high, color = as.factor(type))) +
+  geom_point(size = 0.75, show.legend = FALSE) +
+  geom_pointrange(show.legend = FALSE) +
+  scale_color_manual(values = c('#4361ee', '#6c757d', '#e63946')) +
+  coord_flip() +
+  labs(x = '', y = 'Média dos pontos ideais') +
+  theme_settings
+```
